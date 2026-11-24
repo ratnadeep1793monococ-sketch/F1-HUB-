@@ -1,0 +1,249 @@
+
+"use strict";
+
+/* ==========================================
+   F1 HUB 2.0 — STANDINGS ENGINE
+   Data: Jolpica F1 API
+   Season: 2026
+   ========================================== */
+
+(() => {
+  const API = "https://api.jolpi.ca/ergast/f1/2026";
+  const appView = document.getElementById("appView");
+
+  let activeTab = "drivers";
+  let isStandingsPage = false;
+  let refreshTimer = null;
+
+  const escapeHTML = (value) =>
+    String(value ?? "").replace(/[&<>"']/g, (char) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;"
+    })[char]);
+
+  async function fetchData(type) {
+    const response = await fetch(
+      `${API}/${type}Standings/`,
+      { cache: "no-store" }
+    );
+
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`);
+    }
+
+    const json = await response.json();
+
+    return json?.MRData?.StandingsTable
+      ?.StandingsLists?.[0]?.[type === "driver"
+        ? "DriverStandings"
+        : "ConstructorStandings"] || [];
+  }
+
+  function showLoading() {
+    appView.innerHTML = `
+      <div class="panel">
+        <p class="status">Loading championship standings...</p>
+      </div>`;
+  }
+
+  function showError(error) {
+    appView.innerHTML = `
+      <div class="panel">
+        <h2>STANDINGS UNAVAILABLE</h2>
+        <p class="status">
+          ${escapeHTML(error.message)}
+        </p>
+        <button class="refresh-btn" id="standingsRetry">
+          TRY AGAIN
+        </button>
+      </div>`;
+
+    document.getElementById("standingsRetry")
+      ?.addEventListener("click", loadStandings);
+  }
+
+  function renderHeader() {
+    return `
+      <div class="panel standings-header">
+        <div>
+          <h2>CHAMPIONSHIP</h2>
+          <p class="status">2026 FIA FORMULA ONE WORLD CHAMPIONSHIP</p>
+        </div>
+
+        <button class="refresh-btn" id="standingsRefresh">
+          ↻ REFRESH
+        </button>
+      </div>
+
+      <div class="standings-tabs">
+        <button class="${activeTab === "drivers" ? "active" : ""}"
+          data-tab="drivers">DRIVERS</button>
+
+        <button class="${activeTab === "constructors" ? "active" : ""}"
+          data-tab="constructors">CONSTRUCTORS</button>
+      </div>
+
+      <div id="standingsTable"></div>
+
+      <p class="status standings-footer">
+        Data provided by Jolpica API · Automatically refreshes every 5 minutes
+      </p>`;
+  }
+
+  function renderDrivers(data) {
+    if (!data.length) {
+      return `<div class="panel"><p class="status">
+        No driver standings are available yet.
+      </p></div>`;
+    }
+
+    return `
+      <div class="panel standings-table-wrap">
+        <h3>DRIVER STANDINGS</h3>
+        <div class="table-scroll">
+          <table class="standings-table">
+            <thead>
+              <tr>
+                <th>POS</th>
+                <th>DRIVER</th>
+                <th>TEAM</th>
+                <th>PTS</th>
+                <th>WINS</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${data.map(item => {
+                const driver = item.Driver || {};
+                const constructor = item.Constructors?.[0] || {};
+                const name = `${driver.givenName || ""} ${driver.familyName || ""}`.trim();
+
+                return `
+                  <tr>
+                    <td class="position">${escapeHTML(item.position)}</td>
+                    <td>
+                      <strong>${escapeHTML(name || driver.driverId)}</strong>
+                      <small>${escapeHTML(driver.code || driver.permanentNumber || "")}</small>
+                    </td>
+                    <td>${escapeHTML(constructor.name || "—")}</td>
+                    <td class="points">${escapeHTML(item.points)}</td>
+                    <td>${escapeHTML(item.wins)}</td>
+                  </tr>`;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+  }
+
+  function renderConstructors(data) {
+    if (!data.length) {
+      return `<div class="panel"><p class="status">
+        No constructor standings are available yet.
+      </p></div>`;
+    }
+
+    return `
+      <div class="panel standings-table-wrap">
+        <h3>CONSTRUCTOR STANDINGS</h3>
+        <div class="table-scroll">
+          <table class="standings-table">
+            <thead>
+              <tr>
+                <th>POS</th>
+                <th>CONSTRUCTOR</th>
+                <th>NATIONALITY</th>
+                <th>PTS</th>
+                <th>WINS</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${data.map(item => {
+                const team = item.Constructor || {};
+
+                return `
+                  <tr>
+                    <td class="position">${escapeHTML(item.position)}</td>
+                    <td><strong>${escapeHTML(team.name || team.constructorId)}</strong></td>
+                    <td>${escapeHTML(team.nationality || "—")}</td>
+                    <td class="points">${escapeHTML(item.points)}</td>
+                    <td>${escapeHTML(item.wins)}</td>
+                  </tr>`;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+  }
+
+  async function loadStandings() {
+    if (!isStandingsPage) return;
+
+    showLoading();
+
+    try {
+      const [drivers, constructors] = await Promise.all([
+        fetchData("driver"),
+        fetchData("constructor")
+      ]);
+
+      if (!isStandingsPage) return;
+
+      appView.innerHTML = renderHeader();
+
+      const table = document.getElementById("standingsTable");
+
+      table.innerHTML = activeTab === "drivers"
+        ? renderDrivers(drivers)
+        : renderConstructors(constructors);
+
+      document.getElementById("standingsRefresh")
+        ?.addEventListener("click", loadStandings);
+
+      document.querySelectorAll(".standings-tabs button")
+        .forEach(button => {
+          button.addEventListener("click", () => {
+            activeTab = button.dataset.tab;
+
+            document.querySelectorAll(".standings-tabs button")
+              .forEach(tab => tab.classList.toggle(
+                "active",
+                tab.dataset.tab === activeTab
+              ));
+
+            table.innerHTML = activeTab === "drivers"
+              ? renderDrivers(drivers)
+              : renderConstructors(constructors);
+          });
+        });
+
+    } catch (error) {
+      if (isStandingsPage) showError(error);
+    }
+  }
+
+  // Connect to the existing F1 HUB navigation.
+  const originalShowDashboard = window.showDashboard;
+
+  if (typeof originalShowDashboard !== "function") {
+    console.error("F1 HUB: showDashboard was not found.");
+    return;
+  }
+
+  window.showDashboard = function(page, button) {
+    isStandingsPage = page === "championship";
+
+    originalShowDashboard.apply(this, arguments);
+
+    if (isStandingsPage) {
+      loadStandings();
+    }
+  };
+
+  refreshTimer = setInterval(() => {
+    if (isStandingsPage) loadStandings();
+  }, 5 * 60 * 1000);
+
+})();
